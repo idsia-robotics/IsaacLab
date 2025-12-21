@@ -50,7 +50,7 @@ class QuadcopterEnvWindow(BaseEnvWindow):
 class QuadcopterEnvCfg(DirectRLEnvCfg):
     # env
     episode_length_s = 10.0
-    decimation = 15
+    decimation = 3
     action_space = 4
     observation_space = 12
     state_space = 0
@@ -60,7 +60,7 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
 
     # simulation
     sim: SimulationCfg = SimulationCfg(
-        dt=1 / 500,
+        dt=1 / 100,
         render_interval=decimation,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",

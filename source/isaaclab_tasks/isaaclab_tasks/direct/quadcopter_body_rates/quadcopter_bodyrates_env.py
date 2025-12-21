@@ -51,7 +51,7 @@ class QuadcopterBodyRatesEnvWindow(BaseEnvWindow):
 class QuadcopterBodyRatesEnvCfg(DirectRLEnvCfg):
     # env
     episode_length_s = 10.0
-    decimation = 15
+    decimation = 3
     action_space = 4
     observation_space = 12
     state_space = 0
@@ -62,7 +62,7 @@ class QuadcopterBodyRatesEnvCfg(DirectRLEnvCfg):
 
     # simulation
     sim: SimulationCfg = SimulationCfg(
-        dt=1 / 500,
+        dt=1 / 100,
         render_interval=decimation,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
@@ -97,9 +97,29 @@ class QuadcopterBodyRatesEnvCfg(DirectRLEnvCfg):
     # robot parameters
     arm_length = 0.05           # [m]
     thrust_to_weight = 1.9      # [-]
+    torque_to_thrust = 0.02     # [-]
     max_body_rate = 4.0         # [rad/s]
     max_motor_rads = 10_000 * (2 * math.pi / 60)          # [rad/s]
     motor_time_constant = 0.05  # [s]
+
+    moment_arm = arm_length / math.sqrt(2.0)
+    propeller_pos_b = [
+        [ moment_arm, -moment_arm, 0.0],  # M1 front-right
+        [-moment_arm, -moment_arm, 0.0],  # M2 rear-right
+        [-moment_arm, +moment_arm, 0.0],  # M3 rear-left
+        [+moment_arm, +moment_arm, 0.0],  # M4 front-left
+    ]
+
+    propeller_directions = [
+        +1.0,   # M1 CCW
+        -1.0,   # M2 CW
+        +1.0,   # M3 CCW
+        -1.0    # M4 CW
+    ]
+
+    # controller parameters
+    rate_ctrl_kp = [0.02, 0.02, 0.002]
+    rate_ctrl_kd = [0.0, 0.0, 0.0]
 
     # reward scales
     lin_vel_reward_scale = -0.05
@@ -144,40 +164,25 @@ class QuadcopterBodyRatesEnv(DirectRLEnv):
         self.set_debug_vis(self.cfg.debug_vis)
 
         # Drone parameters
-        L = self.cfg.arm_length / math.sqrt(2.0)
+        self._propeller_pos_b = torch.tensor(
+            self.cfg.propeller_pos_b, device=self.device, dtype=torch.float32
+        )
 
-        self._propeller_pos_b = torch.tensor([
-            [ L, -L, 0.0],  # M1 front-right
-            [-L, -L, 0.0],  # M2 rear-right
-            [-L, +L, 0.0],  # M3 rear-left
-            [+L, +L, 0.0],  # M4 front-left
-        ], device=self.device, dtype=torch.float32)
-        
-        self._propeller_directions = torch.tensor([
-            +1.0,   # M1 CCW
-            -1.0,   # M2 CW
-            +1.0,   # M3 CCW
-            -1.0    # M4 CW
-        ], device=self.device, dtype=torch.float32)
+        self._propeller_directions = torch.tensor(
+            self.cfg.propeller_directions, device=self.device, dtype=torch.float32
+        )
 
         self._max_thrust = self.cfg.thrust_to_weight * self._robot_weight
         propeller_max_thrust = self._max_thrust / 4.0
         self._propeller_thrust_coeff = propeller_max_thrust / (self.cfg.max_motor_rads ** 2)
-        self._propeller_torque_coeff = 0.02 * self._propeller_thrust_coeff  # FIXME: torque coefficient
+        self._propeller_torque_coeff = self.cfg.torque_to_thrust * self._propeller_thrust_coeff  # FIXME: torque coefficient
 
         hover_propeller_thrust = self._robot_weight / 4.0
         self._hover_motor_rads = math.sqrt(hover_propeller_thrust / self._propeller_thrust_coeff)
 
         # Controller parameters
-        self._rate_kp = torch.tensor(
-            [0.02, 0.02, 0.002],
-            device=self.device,
-        )
-
-        self._rate_kd = torch.tensor(
-            [0.0, 0.0, 0.0],
-            device=self.device,
-        )
+        self._rate_ctrl_kp = torch.tensor(self.cfg.rate_ctrl_kp, device=self.device)
+        self._rate_ctrl_kd = torch.tensor(self.cfg.rate_ctrl_kd, device=self.device)
 
         self._prev_body_rate = torch.zeros(self.num_envs, 3, device=self.device)
 
@@ -216,12 +221,11 @@ class QuadcopterBodyRatesEnv(DirectRLEnv):
         rate_error = body_rate_des - body_rate
 
         # Proportional term
-        moment_p = self._rate_kp * rate_error
+        moment_p = self._rate_ctrl_kp * rate_error
 
         # Derivative term
         domega = (body_rate - self._prev_body_rate) / self.step_dt
-        moment_d = -self._rate_kd * domega
-
+        moment_d = -self._rate_ctrl_kd * domega
         self._prev_body_rate = body_rate.clone()
 
         moment_des = moment_p + moment_d
