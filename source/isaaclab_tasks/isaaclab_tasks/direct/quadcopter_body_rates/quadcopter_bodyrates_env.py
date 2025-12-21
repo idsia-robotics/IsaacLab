@@ -51,7 +51,7 @@ class QuadcopterBodyRatesEnvWindow(BaseEnvWindow):
 class QuadcopterBodyRatesEnvCfg(DirectRLEnvCfg):
     # env
     episode_length_s = 10.0
-    decimation = 2
+    decimation = 15
     action_space = 4
     observation_space = 12
     state_space = 0
@@ -62,7 +62,7 @@ class QuadcopterBodyRatesEnvCfg(DirectRLEnvCfg):
 
     # simulation
     sim: SimulationCfg = SimulationCfg(
-        dt=1 / 100,
+        dt=1 / 500,
         render_interval=decimation,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
@@ -277,7 +277,7 @@ class QuadcopterBodyRatesEnv(DirectRLEnv):
 
     def motor_model(self, motor_rads_des: torch.Tensor) -> torch.Tensor:
         """First-order motor model: d(omega)/dt = (omega_des - omega) / tau"""
-        dt = self.step_dt
+        dt = self.physics_dt
         tau = self.cfg.motor_time_constant
         alpha = dt / (tau + dt)
 
@@ -339,6 +339,8 @@ class QuadcopterBodyRatesEnv(DirectRLEnv):
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone().clamp(-1.0, 1.0)
+
+    def _apply_action(self):
         thrust_des = self._max_thrust * (self._actions[:, 0] + 1.0) / 2.0
         body_rate_des = self.cfg.max_body_rate * self._actions[:, 1:4]
 
@@ -355,7 +357,6 @@ class QuadcopterBodyRatesEnv(DirectRLEnv):
         self._thrust[:, 0, :] = thrust
         self._moment[:, 0, :] = moment
 
-    def _apply_action(self):
         self._robot.set_external_force_and_torque(self._thrust, self._moment, body_ids=self._body_id)
         # self._robot.write_joint_velocity_to_sim(self._motor_rads) # FIXME 
 
